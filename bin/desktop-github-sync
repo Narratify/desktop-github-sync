@@ -30,13 +30,14 @@ TEXT_EXTENSIONS = {
     ".java", ".kt", ".kts", ".go", ".rs", ".swift", ".sql", ".r", ".lua",
     ".ini", ".cfg", ".conf", ".env", ".properties", ".log", ".tex",
     ".gitignore", ".gitattributes", ".editorconfig",
+    ".odt", ".ott", ".pdf",
 }
 
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff",
-    ".pdf", ".zip", ".7z", ".gz", ".bz2", ".xz", ".rar", ".tar", ".tgz",
+    ".zip", ".7z", ".gz", ".bz2", ".xz", ".rar", ".tar", ".tgz",
     ".mp3", ".wav", ".flac", ".ogg", ".mp4", ".mov", ".mkv", ".avi",
-    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".ods", ".odp",
     ".sqlite", ".db", ".exe", ".dll", ".so", ".dylib",
 }
 

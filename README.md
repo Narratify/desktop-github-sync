@@ -1,7 +1,7 @@
 # Desktop GitHub Sync
 
-Desktop GitHub Sync is a small Linux user service that watches text files under
-`~/Desktop` and automatically mirrors them to a GitHub repository.
+Desktop GitHub Sync is a small Linux user service that watches selected files
+under `~/Desktop` and automatically mirrors them to a GitHub repository.
 
 The current default target is:
 
@@ -25,9 +25,10 @@ desktop/memo.md
 ## What It Does
 
 - Watches `~/Desktop` recursively.
-- Detects text file additions, updates, and deletions.
-- Ignores common binary formats such as images, videos, archives, PDF files,
-  Office documents, and databases.
+- Detects selected file additions, updates, and deletions.
+- Syncs common text formats plus `.odt`, `.ott`, and `.pdf` documents.
+- Ignores common binary formats such as images, videos, archives, most Office
+  documents, and databases.
 - Copies matching files into a local working Git repository.
 - Commits changes automatically.
 - Pushes changes to GitHub.
@@ -91,12 +92,18 @@ This is simple and reliable for small to moderate desktop folders. If the
 desktop grows to thousands of files, the polling interval can be increased or
 the implementation can be changed to an inotify-based watcher.
 
-## Text File Detection
+## File Detection
 
 The script includes common text extensions such as:
 
 ```text
 .txt .md .json .yaml .yml .toml .csv .tsv .html .css .js .ts .py .sh .sql .log
+```
+
+It also syncs these document formats:
+
+```text
+.odt .ott .pdf
 ```
 
 It also checks unknown extensions by reading a small chunk of the file and
