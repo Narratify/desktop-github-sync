@@ -31,6 +31,7 @@ desktop/memo.md
   documents, and databases.
 - Copies matching files into a local working Git repository.
 - Commits changes automatically.
+- Fetches and rebases remote changes before pushing.
 - Pushes changes to GitHub.
 - Runs as a `systemd --user` service.
 - Restarts automatically if the process exits.

@@ -182,6 +182,17 @@ def push_current_branch():
         return
     branch = run(["git", "branch", "--show-current"], cwd=REPO_DIR)
     branch_name = branch.stdout.strip() or "main"
+    fetch = run(["git", "fetch", "origin"], cwd=REPO_DIR)
+    if fetch.returncode != 0:
+        log("git fetch failed; will retry later")
+        log(fetch.stdout.strip())
+        return
+    rebase = run(["git", "rebase", f"origin/{branch_name}"], cwd=REPO_DIR)
+    if rebase.returncode != 0:
+        run(["git", "rebase", "--abort"], cwd=REPO_DIR)
+        log("git rebase failed; push skipped until conflict is resolved")
+        log(rebase.stdout.strip())
+        return
     push = run(["git", "push", "-u", "origin", f"HEAD:{branch_name}"], cwd=REPO_DIR)
     if push.returncode == 0:
         log("pushed desktop text file changes")
