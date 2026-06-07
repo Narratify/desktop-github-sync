@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+import fnmatch
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+HOME = Path.home()
+DESKTOP = HOME / "Desktop"
+STATE_DIR = HOME / ".local" / "share" / "desktop-github-sync"
+REPO_DIR = STATE_DIR / "repo"
+REMOTE_URL = "https://github.com/Narratify/riyo.git"
+MIRROR_DIRNAME = "desktop"
+POLL_SECONDS = 5
+DEBOUNCE_SECONDS = 2
+PUSH_RETRY_SECONDS = 300
+
+TEXT_EXTENSIONS = {
+    ".txt", ".md", ".markdown", ".rst", ".adoc", ".asc",
+    ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml",
+    ".xml", ".html", ".htm", ".css", ".scss", ".sass", ".less",
+    ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".py", ".rb", ".php", ".pl", ".pm", ".sh", ".bash", ".zsh", ".fish",
+    ".ps1", ".bat", ".cmd", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs",
+    ".java", ".kt", ".kts", ".go", ".rs", ".swift", ".sql", ".r", ".lua",
+    ".ini", ".cfg", ".conf", ".env", ".properties", ".log", ".tex",
+    ".gitignore", ".gitattributes", ".editorconfig",
+}
+
+BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff",
+    ".pdf", ".zip", ".7z", ".gz", ".bz2", ".xz", ".rar", ".tar", ".tgz",
+    ".mp3", ".wav", ".flac", ".ogg", ".mp4", ".mov", ".mkv", ".avi",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
+    ".sqlite", ".db", ".exe", ".dll", ".so", ".dylib",
+}
+
+IGNORE_DIR_NAMES = {
+    ".git", ".svn", ".hg", "__pycache__", "node_modules", ".cache",
+}
+
+
+def log(message: str) -> None:
+    print(f"{datetime.now().isoformat(timespec='seconds')} {message}", flush=True)
+
+
+def run(args, cwd=None, check=False):
+    proc = subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"{' '.join(args)} failed:\n{proc.stdout}")
+    return proc
+
+
+def is_probably_text(path: Path) -> bool:
+    if path.name in TEXT_EXTENSIONS or path.suffix.lower() in TEXT_EXTENSIONS:
+        return True
+    if path.suffix.lower() in BINARY_EXTENSIONS:
+        return False
+    try:
+        with path.open("rb") as f:
+            chunk = f.read(8192)
+    except OSError:
+        return False
+    if not chunk:
+        return True
+    if b"\0" in chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        pass
+    try:
+        chunk.decode("shift_jis")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def iter_source_files():
+    if not DESKTOP.exists():
+        log(f"desktop directory does not exist: {DESKTOP}")
+        return
+    for root, dirs, files in os.walk(DESKTOP, followlinks=False):
+        dirs[:] = [
+            d for d in dirs
+            if d not in IGNORE_DIR_NAMES and not fnmatch.fnmatch(d, "*.tmp")
+        ]
+        root_path = Path(root)
+        for name in files:
+            src = root_path / name
+            if src.is_symlink() or not src.is_file():
+                continue
+            if is_probably_text(src):
+                yield src
+
+
+def file_digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshot():
+    snap = {}
+    for src in iter_source_files():
+        try:
+            stat = src.stat()
+            rel = src.relative_to(DESKTOP).as_posix()
+            snap[rel] = (stat.st_size, int(stat.st_mtime_ns), file_digest(src))
+        except OSError:
+            continue
+    return snap
+
+
+def ensure_repo():
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not (REPO_DIR / ".git").exists():
+        if REPO_DIR.exists() and any(REPO_DIR.iterdir()):
+            raise RuntimeError(f"repo dir exists but is not a git repo: {REPO_DIR}")
+        if REPO_DIR.exists():
+            REPO_DIR.rmdir()
+        proc = run(["git", "clone", REMOTE_URL, str(REPO_DIR)])
+        if proc.returncode != 0:
+            log("git clone failed; creating local repo and retrying push later")
+            log(proc.stdout.strip())
+            REPO_DIR.mkdir(parents=True, exist_ok=True)
+            run(["git", "init", "-b", "main"], cwd=REPO_DIR, check=True)
+            run(["git", "remote", "add", "origin", REMOTE_URL], cwd=REPO_DIR, check=True)
+    else:
+        remote = run(["git", "remote", "get-url", "origin"], cwd=REPO_DIR)
+        if remote.returncode != 0:
+            run(["git", "remote", "add", "origin", REMOTE_URL], cwd=REPO_DIR, check=True)
+        elif remote.stdout.strip() != REMOTE_URL:
+            run(["git", "remote", "set-url", "origin", REMOTE_URL], cwd=REPO_DIR, check=True)
+
+    if run(["git", "config", "user.name"], cwd=REPO_DIR).returncode != 0:
+        run(["git", "config", "user.name", "Desktop GitHub Sync"], cwd=REPO_DIR, check=True)
+    if run(["git", "config", "user.email"], cwd=REPO_DIR).returncode != 0:
+        run(["git", "config", "user.email", "desktop-sync@localhost"], cwd=REPO_DIR, check=True)
+
+
+def mirror_files():
+    mirror_root = REPO_DIR / MIRROR_DIRNAME
+    mirror_root.mkdir(parents=True, exist_ok=True)
+    wanted = set()
+
+    for src in iter_source_files():
+        rel = src.relative_to(DESKTOP)
+        dst = mirror_root / rel
+        wanted.add(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists() or file_digest(src) != file_digest(dst):
+            shutil.copy2(src, dst)
+
+    for path in sorted(mirror_root.rglob("*"), reverse=True):
+        if path.is_file() and path not in wanted:
+            path.unlink()
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+
+
+def push_current_branch():
+    if run(["git", "rev-parse", "--verify", "HEAD"], cwd=REPO_DIR).returncode != 0:
+        return
+    branch = run(["git", "branch", "--show-current"], cwd=REPO_DIR)
+    branch_name = branch.stdout.strip() or "main"
+    push = run(["git", "push", "-u", "origin", f"HEAD:{branch_name}"], cwd=REPO_DIR)
+    if push.returncode == 0:
+        log("pushed desktop text file changes")
+    else:
+        log("git push failed; will retry later")
+        log(push.stdout.strip())
+
+
+def commit_and_push(always_push=False):
+    mirror_files()
+    run(["git", "add", "-A", MIRROR_DIRNAME], cwd=REPO_DIR, check=True)
+    diff = run(["git", "diff", "--cached", "--quiet"], cwd=REPO_DIR)
+    if diff.returncode == 0:
+        if always_push:
+            push_current_branch()
+        return
+
+    ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    run(["git", "commit", "-m", f"Sync desktop text files: {ts}"], cwd=REPO_DIR, check=True)
+    push_current_branch()
+
+
+def main():
+    ensure_repo()
+    last_snapshot = None
+    pending_since = time.monotonic()
+    last_push_retry = 0
+
+    while True:
+        try:
+            current = snapshot()
+            if current != last_snapshot:
+                last_snapshot = current
+                pending_since = time.monotonic()
+            elif time.monotonic() - pending_since >= DEBOUNCE_SECONDS:
+                commit_and_push()
+                pending_since = time.monotonic() + 10**9
+            elif time.monotonic() - last_push_retry >= PUSH_RETRY_SECONDS:
+                commit_and_push(always_push=True)
+                last_push_retry = time.monotonic()
+        except Exception as exc:
+            log(f"error: {exc}")
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

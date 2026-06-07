@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync Desktop text files to GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/desktop-github-sync
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
